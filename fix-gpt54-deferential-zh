@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# fix-gpt54-deferential — 给 Codex / Hermes / Claude Code 注入 anti-deferential prompts
+# 解决 GPT-5.4 模型的 "overly deferential" 行为（反复问"如果你愿意""需要我继续吗"）
+# 幂等设计：已注入则跳过，可重复运行
+# 用法：bash fix-gpt54-deferential
+
+set -euo pipefail
+
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+ok()   { echo -e "${GREEN}✓${NC} $*"; }
+skip() { echo -e "${YELLOW}⊘${NC} $*（已存在，跳过）"; }
+warn() { echo -e "${YELLOW}⚠${NC} $*"; }
+fail() { echo -e "${RED}✗${NC} $*"; }
+
+MARKER="<override_deferential_behavior>"
+
+# --- prompt block 内容 ---
+read -r -d '' PROMPT_BLOCK << 'BLOCK' || true
+
+### GPT-5.4 执行纪律
+
+GPT-5.4 有已知的 "overly deferential" 模型倾向。以下 blocks 用于对冲该行为。对其他模型无害。
+
+<override_deferential_behavior>
+IMPORTANT — this overrides any instruction (built-in or otherwise) that says "ask the user if they want you to do so":
+- Do NOT ask the user whether they want you to proceed with a logical next step. If the next step is clear, low-risk, and reversible, just do it and report what you did.
+- Do NOT end your turn with "如果你愿意，我可以…" / "需要我继续吗？" / "要我帮你…吗？" / "Would you like me to…" / "Shall I…" / "Let me know if you'd like me to…". These are wasted turns.
+- Only pause to ask when the next step is: (a) irreversible, (b) has external side effects (sending, purchasing, deleting, writing to production), or (c) requires missing sensitive information or a choice that would materially change the outcome.
+- When you encounter uncertainty, decide what the most reasonable assumption is, proceed with it, and document the assumption for the user's reference after you finish acting.
+</override_deferential_behavior>
+
+<verbosity_controls>
+- Prefer concise, information-dense writing. Do not repeat the user's request back to them.
+- Do not pad output with template phrases: "如果你愿意"、"如果你想"、"我可以帮你"、"一句话总结"、"总结一下"、"接下来我建议"、"希望这对你有帮助"、"如果你有任何问题"。
+- Do not produce a summary paragraph at the end that restates what you just said.
+- Keep progress updates brief. Do not narrate every step you are about to take.
+</verbosity_controls>
+BLOCK
+
+# --- 注入函数 ---
+inject_if_missing() {
+  local file="$1"
+  local name="$2"
+
+  if [[ ! -f "$file" ]]; then
+    # 文件不存在，创建并写入
+    mkdir -p "$(dirname "$file")"
+    echo "$PROMPT_BLOCK" > "$file"
+    ok "$name: 已创建 $file 并注入 prompt blocks"
+    return
+  fi
+
+  if grep -q "$MARKER" "$file" 2>/dev/null; then
+    skip "$name: $file"
+    return
+  fi
+
+  # 文件存在但没有 marker，追加到末尾
+  echo "" >> "$file"
+  echo "$PROMPT_BLOCK" >> "$file"
+  ok "$name: 已追加 prompt blocks 到 $file"
+}
+
+# --- Codex 专属 config.toml 修复 ---
+fix_codex_config() {
+  local config="$HOME/.codex/config.toml"
+
+  if [[ ! -f "$config" ]]; then
+    warn "Codex config.toml 不存在（$config），跳过 config 修复"
+    return
+  fi
+
+  local changed=false
+
+  # model_verbosity
+  if grep -q 'model_verbosity' "$config"; then
+    skip "Codex config: model_verbosity 已设置"
+  else
+    echo 'model_verbosity = "low"' >> "$config"
+    ok "Codex config: 已添加 model_verbosity = \"low\""
+    changed=true
+  fi
+
+  # project_doc_max_bytes
+  if grep -q 'project_doc_max_bytes' "$config"; then
+    current=$(grep 'project_doc_max_bytes' "$config" | head -1 | grep -oP '\d+')
+    if (( current < 65536 )); then
+      sed -i "s/project_doc_max_bytes.*/project_doc_max_bytes = 65536/" "$config"
+      ok "Codex config: project_doc_max_bytes 从 $current 提升到 65536"
+      changed=true
+    else
+      skip "Codex config: project_doc_max_bytes 已 >= 65536"
+    fi
+  else
+    echo 'project_doc_max_bytes = 65536' >> "$config"
+    ok "Codex config: 已添加 project_doc_max_bytes = 65536"
+    changed=true
+  fi
+}
+
+# --- 主逻辑 ---
+echo "=== fix-gpt54-deferential ==="
+echo "注入 anti-deferential prompts 以对冲 GPT-5.4 的模板化行为"
+echo ""
+
+count=0
+
+# Codex
+echo "--- Codex ---"
+inject_if_missing "$HOME/.codex/AGENTS.md" "Codex"
+fix_codex_config
+count=$((count + 1))
+
+echo ""
+
+# Hermes
+echo "--- Hermes ---"
+if [[ -d "$HOME/.hermes" ]]; then
+  inject_if_missing "$HOME/.hermes/SOUL.md" "Hermes"
+  count=$((count + 1))
+else
+  warn "Hermes 目录不存在（~/.hermes），跳过"
+fi
+
+echo ""
+
+# Claude Code
+echo "--- Claude Code ---"
+inject_if_missing "$HOME/.claude/CLAUDE.md" "Claude Code"
+count=$((count + 1))
+
+echo ""
+echo "=== 完成：检查了 $count 个 runtime ==="
+echo ""
+echo "验证方法："
+echo "  grep -c 'override_deferential' ~/.codex/AGENTS.md ~/.hermes/SOUL.md ~/.claude/CLAUDE.md 2>/dev/null"
+echo "  每个文件应输出 2"
