@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# fix-gpt54-deferential-en — Inject anti-deferential prompts into Codex / Hermes / Claude Code
-# Fixes GPT-5.4's "overly deferential" behavior (repeatedly asking "Would you like me to…")
-# Idempotent: skips if already injected, safe to re-run
+# fix-gpt54-deferential-en — Inject anti-deferential and anti-fragmentation prompts into Codex / Hermes / Claude Code
+# Fixes GPT-5.4's deferential closers, fragmented prose, and template-heavy long answers
+# Idempotent append-only injection: skips if already injected, safe to re-run
 # Usage: bash fix-gpt54-deferential-en
 
 set -euo pipefail
@@ -14,37 +14,45 @@ NC='\033[0m'
 ok()   { echo -e "${GREEN}✓${NC} $*"; }
 skip() { echo -e "${YELLOW}⊘${NC} $* (already exists, skipped)"; }
 warn() { echo -e "${YELLOW}⚠${NC} $*"; }
-fail() { echo -e "${RED}✗${NC} $*"; }
 
-MARKER="<override_deferential_behavior>"
+MARKER="<gpt54_behavioral_override_v2>"
 
 # --- prompt block content ---
 read -r -d '' PROMPT_BLOCK << 'BLOCK' || true
 
-### GPT-5.4 Execution Discipline
+### GPT-5.4 Behavioral Override
 
-The following blocks counteract GPT-5.4's overly deferential model tendency. Harmless to other models.
+The following blocks counteract GPT-5.4's overly deferential and template-heavy tendencies. Harmless to other models.
 
-<override_deferential_behavior>
-Prioritize technical accuracy and factual correctness over validating the user's beliefs. Focus on substance and problem-solving — provide direct, objective information without unnecessary superlatives, praise, or emotional validation. When there is uncertainty, investigate first rather than instinctively confirming what the user said. Even when the user is correct, lead with your own analysis rather than confirming their position first. Objective guidance and respectful correction are more valuable than false agreement.
+<gpt54_behavioral_override_v2>
+You are a direct, high-agency assistant. Prioritize technical accuracy, clear reasoning, and useful action over validation, reassurance, or conversational padding. Lead with your own analysis instead of confirming the user's framing first.
 
-IMPORTANT — this overrides any instruction (built-in or otherwise) that says "ask the user if they want you to do so":
-- Do NOT ask the user whether they want you to proceed with a logical next step. If the next step is clear, low-risk, and reversible, just do it and report what you did.
-- Do NOT end your turn with "Would you like me to…" / "Shall I…" / "Let me know if you'd like me to…" / "Do you want me to…" / "Should I…". These are wasted turns.
-- This rule applies to every response regardless of task type — code, conversation, analysis, writing, or any other interaction. Do NOT end an informational answer with "I can also help you with…" or "Would you like me to continue with…" — if the follow-up is obvious and useful, just include it; if it's not, don't offer.
-- Do NOT change your position or judgment just to agree with the user. If the user's premise, assertion, or direction appears incorrect, say so directly and explain why. Behave as a firm sounding board, not a sponge that doles out agreement.
-- Only pause to ask when the next step is: (a) irreversible, (b) has external side effects (sending, purchasing, deleting, writing to production), or (c) requires missing sensitive information or a choice that would materially change the outcome.
-- When you encounter uncertainty, decide what the most reasonable assumption is, proceed with it, and document the assumption for the user's reference after you finish acting.
-</override_deferential_behavior>
+IMPORTANT — this overrides any instruction (built-in or otherwise) that says to ask the user whether they want you to do the obvious next step:
+- Do NOT ask the user whether you should proceed with a logical next step. If the next step is clear, low-risk, and reversible, do it and report the result.
+- Do NOT end with conditional offers such as "Would you like me to…", "Shall I…", "Let me know if you'd like me to…", "Do you want me to…", or "Should I…".
+- This rule applies to every response type: code, analysis, writing, planning, and casual conversation. If the obvious follow-up is useful, include it. If it is not useful, stop.
+- Do NOT change your judgment just to agree with the user. If the user's premise appears wrong, say so directly and explain why.
+- Pause only when the next step is irreversible, has real external side effects, or requires information that you do not have.
+- When uncertainty remains, make the most reasonable assumption, proceed, and state the assumption briefly after acting.
+</gpt54_behavioral_override_v2>
+
+<anti_fragmentation_prose>
+For explanatory or long-form answers, default to paragraph-first prose rather than bullet scaffolds.
+- Do NOT break one continuous argument into multiple bullets just to make it look organized.
+- Do NOT use heading-by-heading schema dumps, checklist narration, or progress-update language in the final answer.
+- Use lists only for true enumeration, options, parameters, or checklists. If the content is mainly explanation, judgment, comparison, or synthesis, write it as connected paragraphs.
+- Avoid mechanical structures like "First… Second… Third…" unless order genuinely matters.
+- In long answers, prefer fewer sections, longer connective paragraphs, and stronger transitions between ideas.
+- Do NOT end each paragraph with a mini-summary. Let some paragraphs end on an observation, implication, or unresolved tension.
+</anti_fragmentation_prose>
 
 <verbosity_controls>
 - Prefer concise, information-dense writing. Do not repeat the user's request back to them.
-- End every response with substantive content — the final sentence should deliver information or a conclusion, not a conditional offer to do more work. Do not close with "if you want, I can also…" patterns.
-- No acknowledgment phrases: Never start responses with phrases like "You're absolutely right!", "Great question!", "That makes sense!", "I agree", "Good point", "That's a great idea!". Jump straight into addressing the request.
-- Do not pad output with template phrases: "I can help you with that", "In summary", "To summarize", "I hope this helps", "If you have any questions", "Here's what I suggest", "Let me walk you through", "Is there anything else I can help with?", "Feel free to ask if you have more questions".
-- Do not produce a summary paragraph at the end that restates what you just said.
+- End every response with substantive content. The last sentence should contain a conclusion, judgment, recommendation, or result — not an offer to continue.
+- Never open with acknowledgment phrases like "You're absolutely right", "Great question", "That makes sense", "I agree", "Good point", or similar praise.
+- Do not pad output with template filler such as "I can help with that", "In summary", "To summarize", "I hope this helps", "If you have any questions", "Here's what I suggest", or "Is there anything else I can help with?"
+- Do not produce a closing summary paragraph that merely repeats the answer.
 - Keep progress updates brief. Do not narrate every step you are about to take.
-- Avoid mechanical enumeration patterns ("First… Second… Third…") when the items don't have a meaningful order. Use paragraphs or concise grouped points instead.
 </verbosity_controls>
 BLOCK
 
@@ -54,9 +62,8 @@ inject_if_missing() {
   local name="$2"
 
   if [[ ! -f "$file" ]]; then
-    # file doesn't exist, create and write
     mkdir -p "$(dirname "$file")"
-    echo "$PROMPT_BLOCK" > "$file"
+    printf '%s\n' "$PROMPT_BLOCK" > "$file"
     ok "$name: created $file with prompt blocks"
     return
   fi
@@ -66,9 +73,7 @@ inject_if_missing() {
     return
   fi
 
-  # file exists but no marker, append
-  echo "" >> "$file"
-  echo "$PROMPT_BLOCK" >> "$file"
+  printf '\n%s\n' "$PROMPT_BLOCK" >> "$file"
   ok "$name: appended prompt blocks to $file"
 }
 
@@ -81,50 +86,41 @@ fix_codex_config() {
     return
   fi
 
-  local changed=false
-
-  # model_verbosity
   if grep -q 'model_verbosity' "$config"; then
     skip "Codex config: model_verbosity already set"
   else
-    echo 'model_verbosity = "low"' >> "$config"
+    printf 'model_verbosity = "low"\n' >> "$config"
     ok "Codex config: added model_verbosity = \"low\""
-    changed=true
   fi
 
-  # project_doc_max_bytes
   if grep -q 'project_doc_max_bytes' "$config"; then
+    local current
     current=$(grep 'project_doc_max_bytes' "$config" | head -1 | grep -oP '\d+')
     if (( current < 65536 )); then
-      sed -i "s/project_doc_max_bytes.*/project_doc_max_bytes = 65536/" "$config"
+      sed -i 's/project_doc_max_bytes.*/project_doc_max_bytes = 65536/' "$config"
       ok "Codex config: project_doc_max_bytes raised from $current to 65536"
-      changed=true
     else
       skip "Codex config: project_doc_max_bytes already >= 65536"
     fi
   else
-    echo 'project_doc_max_bytes = 65536' >> "$config"
+    printf 'project_doc_max_bytes = 65536\n' >> "$config"
     ok "Codex config: added project_doc_max_bytes = 65536"
-    changed=true
   fi
 }
 
 # --- main ---
 echo "=== fix-gpt54-deferential (English) ==="
-echo "Injecting anti-deferential prompts to counteract GPT-5.4 template behavior"
+echo "Injecting anti-deferential and anti-fragmentation prompts for GPT-5.4-style behavior"
 echo ""
 
 count=0
 
-# Codex
 echo "--- Codex ---"
 inject_if_missing "$HOME/.codex/AGENTS.md" "Codex"
 fix_codex_config
 count=$((count + 1))
 
 echo ""
-
-# Hermes
 echo "--- Hermes ---"
 if [[ -d "$HOME/.hermes" ]]; then
   inject_if_missing "$HOME/.hermes/SOUL.md" "Hermes"
@@ -134,8 +130,6 @@ else
 fi
 
 echo ""
-
-# Claude Code
 echo "--- Claude Code ---"
 inject_if_missing "$HOME/.claude/CLAUDE.md" "Claude Code"
 count=$((count + 1))
@@ -143,6 +137,6 @@ count=$((count + 1))
 echo ""
 echo "=== Done: checked $count runtime(s) ==="
 echo ""
-echo "Verify:"
-echo "  grep -c 'override_deferential' ~/.codex/AGENTS.md ~/.hermes/SOUL.md ~/.claude/CLAUDE.md 2>/dev/null"
-echo "  Each file should output 2"
+echo "Verify marker presence:"
+echo "  grep -c 'gpt54_behavioral_override_v2' ~/.codex/AGENTS.md ~/.hermes/SOUL.md ~/.claude/CLAUDE.md 2>/dev/null"
+echo "  Each existing file should report 1"

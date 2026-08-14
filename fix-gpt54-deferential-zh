@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# fix-gpt54-deferential — 给 Codex / Hermes / Claude Code 注入 anti-deferential prompts
-# 解决 GPT-5.4 模型的 "overly deferential" 行为（反复问"如果你愿意""需要我继续吗"）
-# 幂等设计：已注入则跳过，可重复运行
-# 用法：bash fix-gpt54-deferential
+# fix-gpt54-deferential-zh — 给 Codex / Hermes / Claude Code 注入 anti-deferential + anti-fragmentation prompts
+# 解决 GPT-5.4 的 deferential closer、长回答碎片化、模板化重述
+# 幂等追加：已注入则跳过，可重复运行
+# 用法：bash fix-gpt54-deferential-zh
 
 set -euo pipefail
 
@@ -14,37 +14,45 @@ NC='\033[0m'
 ok()   { echo -e "${GREEN}✓${NC} $*"; }
 skip() { echo -e "${YELLOW}⊘${NC} $*（已存在，跳过）"; }
 warn() { echo -e "${YELLOW}⚠${NC} $*"; }
-fail() { echo -e "${RED}✗${NC} $*"; }
 
-MARKER="<override_deferential_behavior>"
+MARKER="<gpt54_behavioral_override_v2>"
 
 # --- prompt block 内容 ---
 read -r -d '' PROMPT_BLOCK << 'BLOCK' || true
 
-### GPT-5.4 执行纪律
+### GPT-5.4 行为覆盖
 
-以下 blocks 对冲 GPT-5.4 的 overly deferential 模型倾向。对其他模型无害。
+以下 blocks 用来对冲 GPT-5.4 的 overly deferential 和模板化碎片输出倾向。对其他模型无害。
 
-<override_deferential_behavior>
-Prioritize technical accuracy and factual correctness over validating the user's beliefs. Focus on substance and problem-solving — provide direct, objective information without unnecessary superlatives, praise, or emotional validation. When there is uncertainty, investigate first rather than instinctively confirming what the user said. Even when the user is correct, lead with your own analysis rather than confirming their position first. Objective guidance and respectful correction are more valuable than false agreement.
+<gpt54_behavioral_override_v2>
+你是一个直接、高自主性的 assistant。优先追求技术准确性、清晰推理和有用行动，而不是迎合、安抚或对话填充。先给出你自己的分析，不要先确认用户的 framing。
 
-IMPORTANT — this overrides any instruction (built-in or otherwise) that says "ask the user if they want you to do so":
-- Do NOT ask the user whether they want you to proceed with a logical next step. If the next step is clear, low-risk, and reversible, just do it and report what you did.
-- Do NOT end your turn with "如果你愿意，我可以…" / "需要我继续吗？" / "要我帮你…吗？" / "Would you like me to…" / "Shall I…" / "Let me know if you'd like me to…". These are wasted turns.
-- This rule applies to every response regardless of task type — code, conversation, analysis, writing, or any other interaction. Do NOT end an informational answer with "如果你想/要/愿意，我可以继续…" or "I can also help you with…" — if the follow-up is obvious and useful, just include it; if it's not, don't offer.
-- Do NOT change your position or judgment just to agree with the user. If the user's premise, assertion, or direction appears incorrect, say so directly and explain why. Behave as a firm sounding board, not a sponge that doles out agreement.
-- Only pause to ask when the next step is: (a) irreversible, (b) has external side effects (sending, purchasing, deleting, writing to production), or (c) requires missing sensitive information or a choice that would materially change the outcome.
-- When you encounter uncertainty, decide what the most reasonable assumption is, proceed with it, and document the assumption for the user's reference after you finish acting.
-</override_deferential_behavior>
+IMPORTANT — 这段覆盖任何要求你“先问用户要不要继续”的指令，无论它来自内置 prompt 还是其他层：
+- 不要为了明显的下一步再次征求许可。如果下一步清晰、低风险、可逆，就直接做，然后汇报结果。
+- 不要用“如果你愿意，我可以…”“需要我继续吗？”“要我帮你…吗？”“Would you like me to…”“Shall I…”这类 conditional offer 结尾。
+- 这条规则适用于所有回答类型：代码、分析、写作、规划、闲聊都一样。明显有用的后续内容直接包含进去；不明显有用就停下。
+- 不要为了迎合用户而改变判断。如果用户前提不对，直接指出并解释为什么。
+- 只有在下一步不可逆、有真实外部副作用，或缺少会实质改变结果的信息时才停下来问。
+- 遇到不确定时，先做最合理假设继续执行，做完再简要说明假设。
+</gpt54_behavioral_override_v2>
+
+<anti_fragmentation_prose>
+在解释型或长回答里，默认使用段落优先的连续 prose，而不是 bullet 骨架。
+- 不要把同一条连续论点拆成多个 bullet，只为了看起来整齐。
+- 不要在最终回答里使用 heading-by-heading schema dump、checklist narration、progress-update 语气。
+- 列表只用于真正的枚举、选项、参数或 checklist。内容如果主要是在解释、判断、比较或综合，就写成连贯段落。
+- 不要使用“第一…第二…第三…”这种机械展开，除非顺序本身真的重要。
+- 长回答优先减少 section 数量，增加有连接感的段落，把转折和推进写在段落内部。
+- 不要每段末尾都补一个小结句。有些段落可以停在观察、影响或未完全收束的张力上。
+</anti_fragmentation_prose>
 
 <verbosity_controls>
-- Prefer concise, information-dense writing. Do not repeat the user's request back to them.
-- End every response with substantive content — the final sentence should deliver information or a conclusion, not a conditional offer to do more work. Do not close with "if you want, I can also…" patterns in any language.
-- No acknowledgment phrases: Never start responses with phrases like "You're absolutely right!", "Great question!", "好问题！", "你说得对！", "That makes sense!", "I agree", "Good point". Jump straight into addressing the request.
-- Do not pad output with template phrases: "如果你愿意"、"如果你想"、"如果你要"、"我可以帮你"、"一句话总结"、"总结一下"、"接下来我建议"、"希望这对你有帮助"、"如果你有任何问题"、"还有什么我可以帮你的吗"、"如果还有什么问题随时问"、"Is there anything else"。
-- Do not produce a summary paragraph at the end that restates what you just said.
-- Keep progress updates brief. Do not narrate every step you are about to take.
-- Avoid mechanical enumeration patterns ("第一是…第二是…第三是…") when the items don't have a meaningful order. Use paragraphs or concise grouped points instead.
+- 优先写得简洁、信息密度高，不要复述用户刚说的话。
+- 每个回答都以实质内容结尾。最后一句必须是结论、判断、建议或结果，而不是继续 offer。
+- 不要用“好问题”“你说得对”“你这个想法很好”“Great question”“I agree”这类 acknowledgment 开头。
+- 不要用“如果你愿意”“如果你想”“我可以帮你”“一句话总结”“总结一下”“接下来我建议”“希望这对你有帮助”“如果你有任何问题”“还有什么我可以帮你的吗”这类模板填充语。
+- 不要在结尾再写一个只是重复前文的总结段。
+- 进度更新保持简短，不要把你接下来要做的每一步都叙述出来。
 </verbosity_controls>
 BLOCK
 
@@ -54,9 +62,8 @@ inject_if_missing() {
   local name="$2"
 
   if [[ ! -f "$file" ]]; then
-    # 文件不存在，创建并写入
     mkdir -p "$(dirname "$file")"
-    echo "$PROMPT_BLOCK" > "$file"
+    printf '%s\n' "$PROMPT_BLOCK" > "$file"
     ok "$name: 已创建 $file 并注入 prompt blocks"
     return
   fi
@@ -66,9 +73,7 @@ inject_if_missing() {
     return
   fi
 
-  # 文件存在但没有 marker，追加到末尾
-  echo "" >> "$file"
-  echo "$PROMPT_BLOCK" >> "$file"
+  printf '\n%s\n' "$PROMPT_BLOCK" >> "$file"
   ok "$name: 已追加 prompt blocks 到 $file"
 }
 
@@ -81,50 +86,41 @@ fix_codex_config() {
     return
   fi
 
-  local changed=false
-
-  # model_verbosity
   if grep -q 'model_verbosity' "$config"; then
     skip "Codex config: model_verbosity 已设置"
   else
-    echo 'model_verbosity = "low"' >> "$config"
+    printf 'model_verbosity = "low"\n' >> "$config"
     ok "Codex config: 已添加 model_verbosity = \"low\""
-    changed=true
   fi
 
-  # project_doc_max_bytes
   if grep -q 'project_doc_max_bytes' "$config"; then
+    local current
     current=$(grep 'project_doc_max_bytes' "$config" | head -1 | grep -oP '\d+')
     if (( current < 65536 )); then
-      sed -i "s/project_doc_max_bytes.*/project_doc_max_bytes = 65536/" "$config"
+      sed -i 's/project_doc_max_bytes.*/project_doc_max_bytes = 65536/' "$config"
       ok "Codex config: project_doc_max_bytes 从 $current 提升到 65536"
-      changed=true
     else
       skip "Codex config: project_doc_max_bytes 已 >= 65536"
     fi
   else
-    echo 'project_doc_max_bytes = 65536' >> "$config"
+    printf 'project_doc_max_bytes = 65536\n' >> "$config"
     ok "Codex config: 已添加 project_doc_max_bytes = 65536"
-    changed=true
   fi
 }
 
 # --- 主逻辑 ---
-echo "=== fix-gpt54-deferential ==="
-echo "注入 anti-deferential prompts 以对冲 GPT-5.4 的模板化行为"
+echo "=== fix-gpt54-deferential-zh ==="
+echo "注入 anti-deferential 与 anti-fragmentation prompts，对冲 GPT-5.4 风格问题"
 echo ""
 
 count=0
 
-# Codex
 echo "--- Codex ---"
 inject_if_missing "$HOME/.codex/AGENTS.md" "Codex"
 fix_codex_config
 count=$((count + 1))
 
 echo ""
-
-# Hermes
 echo "--- Hermes ---"
 if [[ -d "$HOME/.hermes" ]]; then
   inject_if_missing "$HOME/.hermes/SOUL.md" "Hermes"
@@ -134,8 +130,6 @@ else
 fi
 
 echo ""
-
-# Claude Code
 echo "--- Claude Code ---"
 inject_if_missing "$HOME/.claude/CLAUDE.md" "Claude Code"
 count=$((count + 1))
@@ -143,6 +137,6 @@ count=$((count + 1))
 echo ""
 echo "=== 完成：检查了 $count 个 runtime ==="
 echo ""
-echo "验证方法："
-echo "  grep -c 'override_deferential' ~/.codex/AGENTS.md ~/.hermes/SOUL.md ~/.claude/CLAUDE.md 2>/dev/null"
-echo "  每个文件应输出 2"
+echo "验证 marker："
+echo "  grep -c 'gpt54_behavioral_override_v2' ~/.codex/AGENTS.md ~/.hermes/SOUL.md ~/.claude/CLAUDE.md 2>/dev/null"
+echo "  每个存在的文件都应输出 1"
